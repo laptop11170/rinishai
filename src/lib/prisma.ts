@@ -1,24 +1,27 @@
 import { PrismaClient } from "@prisma/client";
-import { Pool } from "pg";
-import { PrismaPg } from "@prisma/adapter-pg";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-function createPrismaClient(): PrismaClient {
-  // If DATABASE_URL is available, use it
-  if (process.env.DATABASE_URL) {
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-    const adapter = new PrismaPg(pool);
-    return new PrismaClient({ adapter });
-  }
+// Check if we're in a runtime environment with DATABASE_URL
+const hasDatabaseUrl = typeof process !== "undefined" && !!process.env.DATABASE_URL;
 
-  // Fallback for development without database
-  return new PrismaClient();
+let prismaInstance: PrismaClient;
+
+if (hasDatabaseUrl) {
+  // Dynamic import for pg adapter only when DATABASE_URL is available
+  const { Pool } = require("pg");
+  const { PrismaPg } = require("@prisma/adapter-pg");
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const adapter = new PrismaPg(pool);
+  prismaInstance = new PrismaClient({ adapter });
+} else {
+  // Fallback for build time or when no database
+  prismaInstance = new PrismaClient();
 }
 
-export const prisma = globalForPrisma.prisma ?? createPrismaClient();
+export const prisma = globalForPrisma.prisma ?? prismaInstance;
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
