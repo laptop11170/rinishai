@@ -2,7 +2,13 @@ import { promises as fs } from "fs";
 import path from "path";
 import bcrypt from "bcryptjs";
 
-const DATA_DIR = path.join(process.cwd(), ".data", "users");
+// Use Railway persistent volume mount path, fallback to .data in cwd
+const RAILWAY_VOLUME_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
+const DATA_BASE_DIR = RAILWAY_VOLUME_PATH
+  ? path.join(RAILWAY_VOLUME_PATH, ".data")
+  : path.join(process.cwd(), ".data");
+
+const DATA_DIR = path.join(DATA_BASE_DIR, "users");
 
 export interface User {
   id: string;

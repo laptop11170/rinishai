@@ -17,6 +17,14 @@ export interface Message {
   timestamp: number;
   artifactId?: string;
   toolCallId?: string;
+  attachedImages?: AttachedImage[];
+}
+
+export interface AttachedImage {
+  id: string;
+  name: string;
+  type: string;
+  data: string;
 }
 
 export interface ToolCall {

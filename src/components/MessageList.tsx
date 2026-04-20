@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useEffect } from "react";
-import { Square } from "lucide-react";
 import MessageComponent from "./Message";
 import { Conversation } from "@/lib/types";
 import StreamingCursor from "./StreamingCursor";
@@ -9,10 +8,9 @@ import StreamingCursor from "./StreamingCursor";
 interface MessageListProps {
   conversation: Conversation | null;
   isLoading: boolean;
-  onStop?: () => void;
 }
 
-export default function MessageList({ conversation, isLoading, onStop }: MessageListProps) {
+export default function MessageList({ conversation, isLoading }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -55,31 +53,6 @@ export default function MessageList({ conversation, isLoading, onStop }: Message
             <MessageComponent message={message} />
           </div>
         ))}
-
-        {/* Streaming indicator with stop button */}
-        {isStreaming && (
-          <div className="flex items-start gap-3 animate-msg-in">
-            <div
-              className="w-[28px] h-[28px] rounded-[8px] flex items-center justify-center flex-shrink-0 shadow-[0_2px_6px_rgba(153,70,42,0.25)]"
-              style={{ background: "var(--primary)" }}
-            >
-              <img src="/logo.png" alt="Rinish AI" className="w-[28px] h-[28px] rounded-[8px] object-contain" style={{ boxShadow: "0 2px 6px rgba(153,70,42,0.25)" }} />
-            </div>
-            <div className="flex items-center gap-3 px-4 py-3 rounded-[14px] border" style={{ background: "var(--surface)", borderColor: "var(--border-md)" }}>
-              <StreamingCursor />
-              {onStop && (
-                <button
-                  onClick={onStop}
-                  className="p-1.5 rounded-[6px] transition-colors"
-                  style={{ background: "transparent" }}
-                  title="Stop generation"
-                >
-                  <Square className="w-4 h-4" style={{ color: "var(--text-3)" }} />
-                </button>
-              )}
-            </div>
-          </div>
-        )}
 
         <div ref={messagesEndRef} />
       </div>

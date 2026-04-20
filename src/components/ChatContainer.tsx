@@ -11,7 +11,7 @@ import ArtifactPanel from "./ArtifactPanel";
 import AdminPanel from "./AdminPanel";
 
 export default function ChatContainer() {
-  const { state, dispatch, sendMessage, stopGeneration, setActiveMode, userId } = useChat();
+  const { state, dispatch, sendMessage, setActiveMode, userId } = useChat();
   const { conversations, currentConversationId, isLoading, activeArtifactId, activeMode, isSidebarOpen } = state;
   const [showAdminPanel, setShowAdminPanel] = useState(false);
 
@@ -58,7 +58,6 @@ export default function ChatContainer() {
           <MessageList
             conversation={currentConversation}
             isLoading={isLoading}
-            onStop={stopGeneration}
           />
 
           <ChatInput onSend={handleSend} isLoading={isLoading} />

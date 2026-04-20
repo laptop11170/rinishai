@@ -210,6 +210,7 @@ interface ChatContextType {
   userId: string | null | undefined;
   username: string;
   logout: () => void;
+  abortController: AbortController | null;
 }
 
 const ChatContext = createContext<ChatContextType | null>(null);
@@ -306,11 +307,32 @@ export function ChatProvider({ children, userId, username }: { children: ReactNo
     }
 
     const contentBlocks: ContentBlock[] = [{ type: "text", text: content }];
+    const attachedImages: { id: string; name: string; type: string; data: string }[] = [];
 
     if (latestStateRef.current.attachedFiles.length > 0) {
       for (const file of latestStateRef.current.attachedFiles) {
         const mediaTypeMatch = file.type.match(/^(\w+\/[\w+.-]+)/);
         const mediaType = mediaTypeMatch ? mediaTypeMatch[1] : file.type || "application/octet-stream";
+
+        // Save image to persistent storage
+        try {
+          const saveRes = await fetch("/api/images", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageData: file.data, fileName: file.name }),
+          });
+          if (saveRes.ok) {
+            const savedData = await saveRes.json();
+            attachedImages.push({
+              id: savedData.imageId,
+              name: file.name,
+              type: file.type,
+              data: savedData.path, // Store the URL path
+            });
+          }
+        } catch (err) {
+          console.error("Failed to save image:", err);
+        }
 
         contentBlocks.push({
           type: "image",
@@ -346,6 +368,7 @@ Whether you need help with research, writing, coding, or creative tasks, I'm her
       role: "user",
       content: content,
       contentBlocks: contentBlocks,
+      attachedImages: attachedImages.length > 0 ? attachedImages : undefined,
       timestamp: Date.now(),
     };
 
@@ -693,6 +716,7 @@ Whether you need help with research, writing, coding, or creative tasks, I'm her
       userId,
       username: username || "User",
       logout,
+      abortController: state.abortController,
     }}>
       {children}
     </ChatContext.Provider>

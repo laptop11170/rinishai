@@ -96,9 +96,28 @@ export default function MessageComponent({ message }: MessageProps) {
             color: "var(--text)",
           }}
         >
-          <p className="text-[14px] md:text-[15px] leading-[1.6]" style={{ color: "var(--text)" }}>
-            {message.content}
-          </p>
+          {message.attachedImages && message.attachedImages.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              {message.attachedImages.map((img) => (
+                <div key={img.id} className="relative group">
+                  <img
+                    src={img.data}
+                    alt={img.name}
+                    className="max-w-[200px] max-h-[200px] rounded-lg object-cover"
+                    style={{ border: "1px solid var(--border)" }}
+                  />
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
+                    <span className="text-white text-xs truncate max-w-[180px] px-2">{img.name}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {message.content && (
+            <p className="text-[14px] md:text-[15px] leading-[1.6]" style={{ color: "var(--text)" }}>
+              {message.content}
+            </p>
+          )}
         </div>
       </div>
     );

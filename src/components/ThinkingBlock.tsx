@@ -52,8 +52,8 @@ export default function ThinkingBlock({ thinking }: ThinkingBlockProps) {
         <div
           className="px-4 py-4"
           style={{
-            fontSize: "13px",
-            lineHeight: "1.7",
+            fontSize: "11px",
+            lineHeight: "1.6",
             color: "var(--text-2)",
             borderTop: "1px solid var(--border)",
             background: "rgba(255,255,255,0.5)",

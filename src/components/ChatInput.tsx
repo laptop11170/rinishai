@@ -26,7 +26,7 @@ export default function ChatInput({ onSend, isLoading }: ChatInputProps) {
   const modelSelectorRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { state, dispatch, attachFile, removeFile, setActiveMode } = useChat();
+  const { state, dispatch, attachFile, removeFile, setActiveMode, stopGeneration } = useChat();
   const { attachedFiles, activeMode, settings } = state;
 
   // Get current model options (always OpusMax since selector only shows for OpusMax)
@@ -265,7 +265,7 @@ export default function ChatInput({ onSend, isLoading }: ChatInputProps) {
                 ? "Search the web..."
                 : activeMode === "code"
                 ? "Describe code to generate..."
-                : "Ask anything, request an analysis, or describe a system…"
+                : "Ask Rinish AI about anything…"
             }
             disabled={isLoading}
             rows={1}
@@ -273,23 +273,32 @@ export default function ChatInput({ onSend, isLoading }: ChatInputProps) {
             style={{ color: "var(--text)", minHeight: "24px", maxHeight: "160px" }}
           />
 
-          {/* Send Button */}
+          {/* Send / Stop Button */}
           <button
             type="submit"
-            onClick={() => handleSubmit()}
-            disabled={!message.trim() || isLoading}
+            onClick={() => {
+              if (isLoading) {
+                stopGeneration();
+              } else {
+                handleSubmit();
+              }
+            }}
+            disabled={!message.trim() && !isLoading}
             className="w-[40px] h-[40px] md:w-[36px] md:h-[36px] flex items-center justify-center rounded-[11px] border-none transition-all flex-shrink-0"
             style={{
-              background: message.trim() ? "var(--primary)" : "var(--border)",
-              boxShadow: message.trim() ? "0 2px 8px rgba(153,70,42,0.3)" : "none",
+              background: isLoading ? "var(--error, #ef4444)" : (message.trim() ? "var(--primary)" : "var(--border)"),
+              boxShadow: isLoading ? "0 2px 8px rgba(239,68,68,0.3)" : (message.trim() ? "0 2px 8px rgba(153,70,42,0.3)" : "none"),
               color: "#fff",
               alignSelf: "flex-end",
               marginBottom: "1px",
-              cursor: message.trim() && !isLoading ? "pointer" : "not-allowed",
+              cursor: (message.trim() || isLoading) ? "pointer" : "not-allowed",
             }}
+            title={isLoading ? "Stop generating" : "Send message"}
           >
             {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <svg viewBox="0 0 24 24" className="w-4 h-4" style={{ stroke: "#fff", strokeWidth: 2.5, fill: "none" }}>
+                <rect x="6" y="6" width="12" height="12" rx="1" />
+              </svg>
             ) : (
               <svg viewBox="0 0 24 24" className="w-4 h-4" style={{ stroke: "#fff", strokeWidth: 2.2, fill: "none" }}>
                 <line x1="12" y1="19" x2="12" y2="5"/>
