@@ -1,63 +1,34 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { promises as fs } from "fs";
-import path from "path";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/sessions";
-import { getUsers } from "@/lib/users";
+import { getUsers, createUser, getUserById } from "@/lib/users";
+import { resetUsage } from "@/lib/tokenQuota";
 
-const DATA_DIR = path.join(process.cwd(), ".data", "users");
-
-function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): string | null {
+async function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): Promise<string | null> {
   const sessionCookie = cookieStore.get("session");
   const token = sessionCookie?.value;
   if (!token) return null;
-  const session = getSession(token);
+  const session = await getSession(token);
   return session?.userId || null;
-}
-
-interface StoredUser {
-  id: string;
-  username: string;
-  passwordHash?: string;
-  createdAt: number;
-  role: string;
-  quotaLimitTokens?: number;
-  quotaWindowHours?: number;
-}
-
-async function getAllUsers(): Promise<StoredUser[]> {
-  const filePath = path.join(DATA_DIR, "users.json");
-  try {
-    const data = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
-}
-
-async function saveUsers(users: StoredUser[]): Promise<void> {
-  const filePath = path.join(DATA_DIR, "users.json");
-  await fs.writeFile(filePath, JSON.stringify(users, null, 2), "utf-8");
 }
 
 // GET /api/users - list all users (admin only)
 export async function GET() {
   try {
     const cookieStore = await cookies();
-    const userId = getUserFromCookie(cookieStore);
+    const userId = await getUserFromCookie(cookieStore);
 
     if (!userId || userId !== "admin") {
       return NextResponse.json({ error: "Admin only" }, { status: 403 });
     }
 
-    const users = await getAllUsers();
-    // Don't send password hashes
+    const users = await getUsers();
+
     const safeUsers = users.map(u => ({
       id: u.id,
       username: u.username,
       createdAt: u.createdAt,
-      role: u.role,
       quotaLimitTokens: u.quotaLimitTokens || 0,
       quotaWindowHours: u.quotaWindowHours || 0,
     }));
@@ -72,7 +43,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const cookieStore = await cookies();
-    const userId = getUserFromCookie(cookieStore);
+    const userId = await getUserFromCookie(cookieStore);
 
     if (!userId || userId !== "admin") {
       return NextResponse.json({ error: "Admin only" }, { status: 403 });
@@ -84,26 +55,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Username and password required" }, { status: 400 });
     }
 
-    const users = await getAllUsers();
+    const newUser = await createUser(username, password);
 
-    if (users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
+    return NextResponse.json({ success: true, user: { id: newUser.id, username: newUser.username, createdAt: newUser.createdAt } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Username already exists") {
       return NextResponse.json({ error: "Username already exists" }, { status: 400 });
     }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const newUser = {
-      id: `user_${Date.now()}`,
-      username,
-      passwordHash,
-      createdAt: Date.now(),
-      role: "user"
-    };
-
-    users.push(newUser);
-    await saveUsers(users);
-
-    return NextResponse.json({ success: true, user: { id: newUser.id, username: newUser.username, createdAt: newUser.createdAt, role: newUser.role } });
-  } catch {
     return NextResponse.json({ error: "Error" }, { status: 500 });
   }
 }
@@ -112,40 +70,42 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   try {
     const cookieStore = await cookies();
-    const userId = getUserFromCookie(cookieStore);
+    const userId = await getUserFromCookie(cookieStore);
 
     if (!userId || userId !== "admin") {
       return NextResponse.json({ error: "Admin only" }, { status: 403 });
     }
 
-    const { targetUserId, password, quotaLimitTokens, quotaWindowHours, resetUsage } = await request.json();
+    const { targetUserId, password, quotaLimitTokens, quotaWindowHours, resetUsage: shouldReset } = await request.json();
 
     if (!targetUserId) {
       return NextResponse.json({ error: "User ID required" }, { status: 400 });
     }
 
-    const users = await getAllUsers();
-    const userIndex = users.findIndex(u => u.id === targetUserId);
-
-    if (userIndex === -1) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
+    // Update password if provided
     if (password) {
-      users[userIndex].passwordHash = await bcrypt.hash(password, 12);
+      const { prisma } = await import("@/lib/prisma");
+      await prisma.user.update({
+        where: { id: targetUserId },
+        data: { passwordHash: await bcrypt.hash(password, 12) },
+      });
     }
 
+    // Update quota settings
     if (quotaLimitTokens !== undefined || quotaWindowHours !== undefined) {
-      users[userIndex].quotaLimitTokens = quotaLimitTokens ?? 0;
-      users[userIndex].quotaWindowHours = quotaWindowHours ?? 0;
+      const { prisma } = await import("@/lib/prisma");
+      await prisma.user.update({
+        where: { id: targetUserId },
+        data: {
+          quotaLimit: quotaLimitTokens ?? null,
+          quotaWindowHours: quotaWindowHours ?? null,
+        },
+      });
     }
-
-    await saveUsers(users);
 
     // Reset usage if requested
-    if (resetUsage) {
-      const { resetUsage: resetFn } = await import("@/lib/tokenQuota");
-      await resetFn(targetUserId);
+    if (shouldReset) {
+      await resetUsage(targetUserId);
     }
 
     return NextResponse.json({ success: true });
@@ -158,7 +118,7 @@ export async function PUT(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const cookieStore = await cookies();
-    const userId = getUserFromCookie(cookieStore);
+    const userId = await getUserFromCookie(cookieStore);
 
     if (!userId || userId !== "admin") {
       return NextResponse.json({ error: "Admin only" }, { status: 403 });
@@ -174,9 +134,12 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "Cannot delete admin" }, { status: 400 });
     }
 
-    let users = await getAllUsers();
-    users = users.filter(u => u.id !== targetUserId);
-    await saveUsers(users);
+    const { deleteUser } = await import("@/lib/users");
+    const success = await deleteUser(targetUserId);
+
+    if (!success) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
 
     return NextResponse.json({ success: true });
   } catch {

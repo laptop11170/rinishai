@@ -1,13 +1,4 @@
-import { promises as fs } from "fs";
-import path from "path";
-
-// Use Railway persistent volume mount path, fallback to .data in cwd
-const RAILWAY_VOLUME_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
-const DATA_BASE_DIR = RAILWAY_VOLUME_PATH
-  ? path.join(RAILWAY_VOLUME_PATH, ".data")
-  : path.join(process.cwd(), ".data");
-
-const DATA_DIR = path.join(DATA_BASE_DIR, "usage");
+import { prisma } from "./prisma";
 
 export interface QuotaRecord {
   userId: string;
@@ -17,56 +8,44 @@ export interface QuotaRecord {
   windowHours: number;
 }
 
-interface QuotaStore {
-  [userId: string]: QuotaRecord;
-}
-
-async function ensureDir() {
-  try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
-}
-
-async function loadQuotas(): Promise<QuotaStore> {
-  await ensureDir();
-  const filePath = path.join(DATA_DIR, "quotas.json");
-  try {
-    const data = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
-}
-
-async function saveQuotas(quotas: QuotaStore): Promise<void> {
-  await ensureDir();
-  const filePath = path.join(DATA_DIR, "quotas.json");
-  await fs.writeFile(filePath, JSON.stringify(quotas, null, 2), "utf-8");
-}
-
 function getWindowMs(windowHours: number): number {
   return windowHours * 60 * 60 * 1000;
 }
 
 export async function getQuota(userId: string): Promise<QuotaRecord | null> {
-  const quotas = await loadQuotas();
-  return quotas[userId] || null;
+  const record = await prisma.tokenQuota.findUnique({
+    where: { userId },
+  });
+
+  if (!record) return null;
+
+  return {
+    userId: record.userId,
+    usedTokens: Number(record.usedTokens),
+    windowStart: Number(record.windowStart),
+    limitTokens: Number(record.limitTokens),
+    windowHours: record.windowHours,
+  };
 }
 
 export async function createQuota(userId: string, limitTokens: number, windowHours: number): Promise<QuotaRecord> {
-  const quotas = await loadQuotas();
-  const record: QuotaRecord = {
-    userId,
-    usedTokens: 0,
-    windowStart: Date.now(),
-    limitTokens,
-    windowHours,
+  const record = await prisma.tokenQuota.create({
+    data: {
+      userId,
+      usedTokens: 0,
+      windowStart: BigInt(Date.now()),
+      limitTokens: BigInt(limitTokens),
+      windowHours,
+    },
+  });
+
+  return {
+    userId: record.userId,
+    usedTokens: Number(record.usedTokens),
+    windowStart: Number(record.windowStart),
+    limitTokens: Number(record.limitTokens),
+    windowHours: record.windowHours,
   };
-  quotas[userId] = record;
-  await saveQuotas(quotas);
-  return record;
 }
 
 export async function checkQuota(userId: string, tokensNeeded: number): Promise<{
@@ -74,8 +53,7 @@ export async function checkQuota(userId: string, tokensNeeded: number): Promise<
   remaining: number;
   resetsAt: number;
 }> {
-  const quotas = await loadQuotas();
-  const record = quotas[userId];
+  const record = await getQuota(userId);
 
   if (!record || record.limitTokens <= 0) {
     return { allowed: true, remaining: -1, resetsAt: 0 };
@@ -100,38 +78,53 @@ export async function checkQuota(userId: string, tokensNeeded: number): Promise<
 export async function consumeTokens(userId: string, tokensUsed: number): Promise<QuotaRecord | null> {
   if (tokensUsed <= 0) return null;
 
-  const quotas = await loadQuotas();
-  const record = quotas[userId];
-
-  if (!record || record.limitTokens <= 0) return record || null;
+  const record = await getQuota(userId);
+  if (!record || record.limitTokens <= 0) return record;
 
   const windowMs = getWindowMs(record.windowHours);
   const windowEnd = record.windowStart + windowMs;
   const now = Date.now();
 
+  let newUsedTokens: number;
+  let newWindowStart: number;
+
   if (now >= windowEnd) {
-    record.usedTokens = tokensUsed;
-    record.windowStart = now;
+    newUsedTokens = tokensUsed;
+    newWindowStart = now;
   } else {
-    record.usedTokens += tokensUsed;
+    newUsedTokens = record.usedTokens + tokensUsed;
+    newWindowStart = record.windowStart;
   }
 
-  quotas[userId] = record;
-  await saveQuotas(quotas);
-  return record;
+  const updated = await prisma.tokenQuota.update({
+    where: { userId },
+    data: {
+      usedTokens: BigInt(newUsedTokens),
+      windowStart: BigInt(newWindowStart),
+    },
+  });
+
+  return {
+    userId: updated.userId,
+    usedTokens: Number(updated.usedTokens),
+    windowStart: Number(updated.windowStart),
+    limitTokens: Number(updated.limitTokens),
+    windowHours: updated.windowHours,
+  };
 }
 
 export async function resetUsage(userId: string): Promise<void> {
-  const quotas = await loadQuotas();
-  if (quotas[userId]) {
-    quotas[userId].usedTokens = 0;
-    quotas[userId].windowStart = Date.now();
-    await saveQuotas(quotas);
-  }
+  await prisma.tokenQuota.update({
+    where: { userId },
+    data: {
+      usedTokens: 0,
+      windowStart: BigInt(Date.now()),
+    },
+  });
 }
 
 export async function deleteQuota(userId: string): Promise<void> {
-  const quotas = await loadQuotas();
-  delete quotas[userId];
-  await saveQuotas(quotas);
+  await prisma.tokenQuota.delete({
+    where: { userId },
+  }).catch(() => {});
 }

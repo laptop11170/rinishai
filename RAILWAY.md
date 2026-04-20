@@ -1,89 +1,56 @@
 # Railway Deployment
 
-## Persistent Storage Setup (CRITICAL)
+## PostgreSQL Database Setup
 
-**By default, Railway's filesystem is ephemeral - all data is deleted on every redeploy.**
+Your data (users, chats, sessions, images) is now stored in PostgreSQL for persistent storage across redeploys.
 
-To preserve your data (users, chats, images, sessions), you MUST set up a persistent volume.
-
-### Step 1: Create a Persistent Volume
+### Step 1: Add PostgreSQL Database
 
 1. Go to your Railway project dashboard
-2. Navigate to **Storage** → **Add Persistent Disk**
-3. Create a new volume (e.g., named "data" or "storage")
-4. Note the **Volume Mount Path** shown (e.g., `/var/data`)
+2. Click **Add a Service** → **Database** → **PostgreSQL**
+3. Railway will automatically create a PostgreSQL database and set the `DATABASE_URL` environment variable
 
-### Step 2: Configure the Volume Mount
+### Step 2: Verify Setup
 
-1. Go to your ** NixOS** (or service) settings
-2. Under **Storage**, mount the persistent disk to your service
-3. Set the mount path to match what your code expects
+Railway automatically provides the connection string via the `DATABASE_URL` environment variable. No manual configuration needed.
 
-### Step 3: Add Environment Variable
+### Step 3: Run Database Migrations
 
-In Railway dashboard, add this environment variable:
+After deployment, run the migration to create tables:
 
-| Variable | Value |
-|----------|-------|
-| `RAILWAY_VOLUME_MOUNT_PATH` | The mount path from Step 1 (e.g., `/var/data`) |
-
-### How It Works
-
-When `RAILWAY_VOLUME_MOUNT_PATH` is set:
-- Data is stored at `<volume_path>/.data/`
-- This persists across all deploys
-- Example path: `/var/data/.data/chats/`, `/var/data/.data/images/`
-
-When NOT set (local development):
-- Falls back to `<project_dir>/.data/`
-- Data is stored locally for development
-
-### Data Locations (when volume is configured)
-
+```bash
+npx prisma migrate deploy
 ```
-/var/data/.data/
-├── chats/          # User conversations (userId.json)
-├── images/        # Uploaded images
-│   └── [userId]/
-│       └── [image files]
-├── sessions/      # Session tokens
-├── usage/         # Token quota tracking
-└── users/         # User accounts
-```
+
+Or let Railway run it automatically on deploy by adding a build command:
+
+**In Railway Dashboard:**
+1. Go to your service → Settings → Deploy
+2. Add a **Before Deploy Command**: `npx prisma migrate deploy`
 
 ---
 
-## Initial Setup
+## Environment Variables
 
-1. Create a new project on Railway (https://railway.app)
-2. Connect your GitHub repository
-3. Add environment variables in Railway dashboard:
-   - `ALLOW_REGISTRATION=true` (set to false after creating all users)
-   - `RAILWAY_VOLUME_MOUNT_PATH=/var/data` (replace with your volume mount path)
-   - Add any LLM API keys if needed (e.g., `ANTHROPIC_API_KEY`)
-4. Set up the persistent volume as described above
-5. Deploy
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | PostgreSQL connection string (auto-provided by Railway) | Yes |
+| `ALLOW_REGISTRATION` | Set to `false` to disable new user registration | No |
+| `OPUSMAX_API_KEY` | Your OpusMax API key | Yes (for LLM access) |
+
+---
 
 ## First-Time Setup
 
-When you first deploy, the app will show a registration screen. Create your admin account here. After that, you can:
-- Set `ALLOW_REGISTRATION=false` to disable new registrations
-- Or keep it `true` if you want users to be able to sign up
+1. Deploy the app to Railway
+2. Add PostgreSQL database to your project
+3. Run migrations: `npx prisma migrate deploy`
+4. Visit your app and register your admin account
+5. Set `ALLOW_REGISTRATION=false` to prevent new registrations
 
 ## Adding Users
 
-Users can register directly through the app if `ALLOW_REGISTRATION=true`. Alternatively, manually add to `.data/users/users.json`:
-
-```json
-[
-  {
-    "id": "user_1234567890",
-    "username": "john",
-    "passwordHash": "$2a$12$...",
-    "createdAt": 1234567890
-  }
-]
-```
+Users can register directly through the app if `ALLOW_REGISTRATION=true`. Alternatively, create users through the admin panel (login as admin user).
 
 ## Custom Domain
 
@@ -91,9 +58,26 @@ Users can register directly through the app if `ALLOW_REGISTRATION=true`. Altern
 2. Add your custom domain
 3. Follow Railway's DNS instructions (typically add a CNAME record)
 
-## Backup Recommendation
+## Local Development
 
-For production use, consider:
-- Regular backups of the persistent volume
-- Railway's native backup features (if available in your plan)
-- External database migration for critical data
+For local development with PostgreSQL:
+
+1. Install PostgreSQL locally or use Docker:
+   ```bash
+   docker run --name postgres -e POSTGRES_PASSWORD=password -p 5432:5432 -d postgres
+   ```
+
+2. Create a `.env.local` file:
+   ```
+   DATABASE_URL=postgresql://postgres:password@localhost:5432/rinish_ai
+   ```
+
+3. Run migrations:
+   ```bash
+   npx prisma migrate dev
+   ```
+
+4. Start the dev server:
+   ```bash
+   npm run dev
+   ```

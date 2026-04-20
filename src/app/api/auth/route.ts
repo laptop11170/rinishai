@@ -1,26 +1,15 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { cookies } from "next/headers";
-import { sessions, createSession, getSession, deleteSession, generateToken } from "@/lib/sessions";
+import { createSession, getSession, deleteSession, generateToken } from "@/lib/sessions";
 import { validatePassword, createUser, getUserById } from "@/lib/users";
+import { prisma } from "@/lib/prisma";
 
-const DATA_DIR = path.join(process.cwd(), ".data", "chats");
-
-async function ensureDir(dir: string) {
-  try {
-    await fs.mkdir(dir, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
-}
-
-function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): string | null {
+async function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): Promise<string | null> {
   const sessionCookie = cookieStore.get("session");
   const token = sessionCookie?.value;
 
   if (!token) return null;
-  const session = getSession(token);
+  const session = await getSession(token);
   return session?.userId || null;
 }
 
@@ -28,7 +17,7 @@ function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): st
 export async function GET() {
   try {
     const cookieStore = await cookies();
-    const userId = getUserFromCookie(cookieStore);
+    const userId = await getUserFromCookie(cookieStore);
 
     let username = null;
     if (userId) {
@@ -51,18 +40,8 @@ export async function POST(request: Request) {
       // For small team deployments, always allow registration
       // To restrict, set ALLOW_REGISTRATION=false and delete existing users
       if (process.env.ALLOW_REGISTRATION === "false") {
-        // Check if any users exist - if not, allow first user to register
-        const usersDir = path.join(process.cwd(), ".data", "users");
-        await ensureDir(usersDir);
-        const usersFile = path.join(usersDir, "users.json");
-        let existingUsers: unknown[] = [];
-        try {
-          const data = await fs.readFile(usersFile, "utf-8");
-          existingUsers = JSON.parse(data);
-        } catch {
-          // No users file yet
-        }
-        if (existingUsers.length > 0) {
+        const userCount = await prisma.user.count();
+        if (userCount > 0) {
           return NextResponse.json({ error: "Registration disabled. Contact admin." }, { status: 403 });
         }
       }
@@ -73,7 +52,7 @@ export async function POST(request: Request) {
 
       const user = await createUser(username, password);
       const token = generateToken();
-      createSession(token, user.id);
+      await createSession(token, user.id);
 
       const response = NextResponse.json({ success: true, userId: user.id, username: user.username });
       response.cookies.set("session", token, {
@@ -97,7 +76,7 @@ export async function POST(request: Request) {
     }
 
     const token = generateToken();
-    createSession(token, user.id);
+    await createSession(token, user.id);
 
     const response = NextResponse.json({ success: true, userId: user.id, username: user.username });
     response.cookies.set("session", token, {
@@ -123,7 +102,7 @@ export async function DELETE() {
     const token = sessionCookie?.value;
 
     if (token) {
-      deleteSession(token);
+      await deleteSession(token);
     }
 
     const response = NextResponse.json({ success: true });

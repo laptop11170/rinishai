@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { promises as fs } from "fs";
-import path from "path";
 import { getSession } from "@/lib/sessions";
-
-const DATA_DIR = path.join(process.cwd(), ".data", "users");
+import { getQuota } from "@/lib/tokenQuota";
+import { getUserById } from "@/lib/users";
 
 async function getUserBySession(): Promise<{ id: string; quotaLimitTokens?: number; quotaWindowHours?: number } | null> {
   const cookieStore = await cookies();
@@ -12,28 +10,11 @@ async function getUserBySession(): Promise<{ id: string; quotaLimitTokens?: numb
   const token = sessionCookie?.value;
   if (!token) return null;
 
-  const session = getSession(token);
+  const session = await getSession(token);
   const userId = session?.userId;
   if (!userId) return null;
 
-  try {
-    const filePath = path.join(DATA_DIR, "users.json");
-    const data = await fs.readFile(filePath, "utf-8");
-    const users = JSON.parse(data);
-    return users.find((u: { id: string }) => u.id === userId) || null;
-  } catch {
-    return null;
-  }
-}
-
-async function loadQuotas(): Promise<Record<string, { usedTokens: number; windowStart: number; limitTokens: number; windowHours: number }>> {
-  try {
-    const filePath = path.join(process.cwd(), ".data", "usage", "quotas.json");
-    const data = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
+  return getUserById(userId);
 }
 
 export async function GET() {
@@ -46,7 +27,7 @@ export async function GET() {
     const { quotaLimitTokens = 0, quotaWindowHours = 0 } = user;
 
     // No quota set
-    if (quotaLimitTokens <= 0) {
+    if (!quotaLimitTokens || quotaLimitTokens <= 0) {
       return NextResponse.json({
         hasQuota: false,
         usedTokens: 0,
@@ -56,8 +37,7 @@ export async function GET() {
       });
     }
 
-    const quotas = await loadQuotas();
-    const record = quotas[user.id];
+    const record = await getQuota(user.id);
 
     if (!record) {
       return NextResponse.json({

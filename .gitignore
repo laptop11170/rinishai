@@ -42,3 +42,5 @@ next-env.d.ts
 
 # chat data
 .data/
+
+/src/generated/prisma

@@ -1,14 +1,5 @@
-import { promises as fs } from "fs";
-import path from "path";
 import bcrypt from "bcryptjs";
-
-// Use Railway persistent volume mount path, fallback to .data in cwd
-const RAILWAY_VOLUME_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
-const DATA_BASE_DIR = RAILWAY_VOLUME_PATH
-  ? path.join(RAILWAY_VOLUME_PATH, ".data")
-  : path.join(process.cwd(), ".data");
-
-const DATA_DIR = path.join(DATA_BASE_DIR, "users");
+import { prisma } from "./prisma";
 
 export interface User {
   id: string;
@@ -19,71 +10,123 @@ export interface User {
   quotaWindowHours?: number;
 }
 
-async function ensureDir() {
-  try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
-}
-
 export async function getUsers(): Promise<User[]> {
-  await ensureDir();
-  const filePath = path.join(DATA_DIR, "users.json");
-  try {
-    const data = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
+  const users = await prisma.user.findMany({
+    select: {
+      id: true,
+      username: true,
+      passwordHash: true,
+      createdAt: true,
+      quotaLimit: true,
+      quotaWindowHours: true,
+    },
+  });
+  return users.map((u) => ({
+    id: u.id,
+    username: u.username,
+    passwordHash: u.passwordHash,
+    createdAt: u.createdAt.getTime(),
+    quotaLimitTokens: u.quotaLimit ?? undefined,
+    quotaWindowHours: u.quotaWindowHours ?? undefined,
+  }));
 }
 
 export async function saveUsers(users: User[]): Promise<void> {
-  await ensureDir();
-  const filePath = path.join(DATA_DIR, "users.json");
-  await fs.writeFile(filePath, JSON.stringify(users, null, 2), "utf-8");
+  // This is now handled by individual user operations
+  // Kept for compatibility but does nothing
 }
 
 export async function createUser(username: string, password: string): Promise<User> {
-  const users = await getUsers();
-  const existingUser = users.find((u) => u.username.toLowerCase() === username.toLowerCase());
+  const existingUser = await prisma.user.findUnique({
+    where: { username },
+  });
   if (existingUser) {
     throw new Error("Username already exists");
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const user: User = {
-    id: `user_${Date.now()}`,
-    username,
-    passwordHash,
-    createdAt: Date.now(),
-  };
+  const user = await prisma.user.create({
+    data: {
+      id: `user_${Date.now()}`,
+      username,
+      passwordHash,
+    },
+    select: {
+      id: true,
+      username: true,
+      passwordHash: true,
+      createdAt: true,
+      quotaLimit: true,
+      quotaWindowHours: true,
+    },
+  });
 
-  users.push(user);
-  await saveUsers(users);
-  return user;
+  return {
+    id: user.id,
+    username: user.username,
+    passwordHash: user.passwordHash,
+    createdAt: user.createdAt.getTime(),
+    quotaLimitTokens: user.quotaLimit ?? undefined,
+    quotaWindowHours: user.quotaWindowHours ?? undefined,
+  };
 }
 
 export async function validatePassword(username: string, password: string): Promise<User | null> {
-  const users = await getUsers();
-  const user = users.find((u) => u.username.toLowerCase() === username.toLowerCase());
+  const user = await prisma.user.findUnique({
+    where: { username },
+    select: {
+      id: true,
+      username: true,
+      passwordHash: true,
+      createdAt: true,
+      quotaLimit: true,
+      quotaWindowHours: true,
+    },
+  });
   if (!user) return null;
 
   const isValid = await bcrypt.compare(password, user.passwordHash);
-  return isValid ? user : null;
+  if (!isValid) return null;
+
+  return {
+    id: user.id,
+    username: user.username,
+    passwordHash: user.passwordHash,
+    createdAt: user.createdAt.getTime(),
+    quotaLimitTokens: user.quotaLimit ?? undefined,
+    quotaWindowHours: user.quotaWindowHours ?? undefined,
+  };
 }
 
 export async function getUserById(id: string): Promise<User | null> {
-  const users = await getUsers();
-  return users.find((u) => u.id === id) || null;
+  const user = await prisma.user.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      username: true,
+      passwordHash: true,
+      createdAt: true,
+      quotaLimit: true,
+      quotaWindowHours: true,
+    },
+  });
+  if (!user) return null;
+
+  return {
+    id: user.id,
+    username: user.username,
+    passwordHash: user.passwordHash,
+    createdAt: user.createdAt.getTime(),
+    quotaLimitTokens: user.quotaLimit ?? undefined,
+    quotaWindowHours: user.quotaWindowHours ?? undefined,
+  };
 }
 
 export async function deleteUser(id: string): Promise<boolean> {
-  const users = await getUsers();
-  const index = users.findIndex((u) => u.id === id);
-  if (index === -1) return false;
-
-  users.splice(index, 1);
-  await saveUsers(users);
-  return true;
+  try {
+    await prisma.user.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
 }

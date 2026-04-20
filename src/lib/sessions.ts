@@ -1,86 +1,83 @@
 import crypto from "crypto";
-import { promises as fs } from "fs";
-import path from "path";
+import { prisma } from "./prisma";
 
-interface Session {
+export interface Session {
   userId: string;
   expires: number;
 }
 
-// Use Railway persistent volume mount path, fallback to .data in cwd
-const RAILWAY_VOLUME_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
-const DATA_BASE_DIR = RAILWAY_VOLUME_PATH
-  ? path.join(RAILWAY_VOLUME_PATH, ".data")
-  : path.join(process.cwd(), ".data");
-
-const SESSION_DIR = path.join(DATA_BASE_DIR, "sessions");
-const SESSION_FILE = path.join(SESSION_DIR, "sessions.json");
-
-// In-memory session store
-export const sessions = new Map<string, Session>();
-
-async function loadSessions(): Promise<void> {
-  try {
-    await fs.mkdir(SESSION_DIR, { recursive: true });
-    const data = await fs.readFile(SESSION_FILE, "utf-8");
-    const saved: [string, Session][] = JSON.parse(data);
-    for (const [token, session] of saved) {
-      if (Date.now() < session.expires) {
-        sessions.set(token, session);
-      }
-    }
-  } catch {
-    // No saved sessions or empty dir
-  }
-}
-
-async function saveSessions(): Promise<void> {
-  await fs.mkdir(SESSION_DIR, { recursive: true });
-  const data = JSON.stringify([...sessions.entries()]);
-  await fs.writeFile(SESSION_FILE, data, "utf-8");
-}
-
-// Load persisted sessions on module init
-loadSessions();
+const sessionCache = new Map<string, Session>();
 
 export function generateToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
-export function createSession(token: string, userId: string, expiryMs: number = 30 * 24 * 60 * 60 * 1000): void {
-  sessions.set(token, {
-    userId,
-    expires: Date.now() + expiryMs,
+export async function createSession(token: string, userId: string, expiryMs: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+  const expiresAt = new Date(Date.now() + expiryMs);
+
+  await prisma.session.create({
+    data: {
+      id: `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      userId,
+      token,
+      expiresAt,
+    },
   });
-  saveSessions().catch((err) => console.error("Failed to save sessions:", err));
+
+  sessionCache.set(token, {
+    userId,
+    expires: expiresAt.getTime(),
+  });
 }
 
-export function getSession(token: string): Session | null {
-  const session = sessions.get(token);
+export async function getSession(token: string): Promise<Session | null> {
+  // Check cache first
+  const cached = sessionCache.get(token);
+  if (cached) {
+    if (Date.now() > cached.expires) {
+      sessionCache.delete(token);
+      await prisma.session.deleteMany({ where: { token } });
+      return null;
+    }
+    return cached;
+  }
+
+  // Load from database
+  const session = await prisma.session.findUnique({
+    where: { token },
+    select: { userId: true, expiresAt: true },
+  });
+
   if (!session) return null;
-  if (Date.now() > session.expires) {
-    sessions.delete(token);
-    saveSessions().catch((err) => console.error("Failed to save sessions:", err));
+
+  const sessionData: Session = {
+    userId: session.userId,
+    expires: session.expiresAt.getTime(),
+  };
+
+  if (Date.now() > sessionData.expires) {
+    await prisma.session.delete({ where: { token } });
     return null;
   }
-  return session;
+
+  sessionCache.set(token, sessionData);
+  return sessionData;
 }
 
-export function deleteSession(token: string): void {
-  sessions.delete(token);
-  saveSessions().catch((err) => console.error("Failed to save sessions:", err));
+export async function deleteSession(token: string): Promise<void> {
+  sessionCache.delete(token);
+  await prisma.session.deleteMany({ where: { token } });
 }
 
-export function cleanExpiredSessions(): void {
-  const now = Date.now();
-  let changed = false;
-  for (const [token, session] of sessions.entries()) {
-    if (now > session.expires) {
-      sessions.delete(token);
-      changed = true;
+export async function cleanExpiredSessions(): Promise<void> {
+  await prisma.session.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+
+  // Clean cache
+  for (const [token, session] of sessionCache.entries()) {
+    if (Date.now() > session.expires) {
+      sessionCache.delete(token);
     }
-  }
-  if (changed) {
-    saveSessions().catch((err) => console.error("Failed to save sessions:", err));
   }
 }

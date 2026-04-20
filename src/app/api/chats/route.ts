@@ -1,32 +1,14 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/sessions";
-import { getUserById } from "@/lib/users";
+import { prisma } from "@/lib/prisma";
 
-// Use Railway persistent volume mount path, fallback to .data in cwd
-const RAILWAY_VOLUME_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
-const DATA_BASE_DIR = RAILWAY_VOLUME_PATH
-  ? path.join(RAILWAY_VOLUME_PATH, ".data")
-  : path.join(process.cwd(), ".data");
-
-const DATA_DIR = path.join(DATA_BASE_DIR, "chats");
-
-async function ensureDir(dir: string) {
-  try {
-    await fs.mkdir(dir, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
-}
-
-function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): string | null {
+async function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): Promise<string | null> {
   const sessionCookie = cookieStore.get("session");
   const token = sessionCookie?.value;
 
   if (!token) return null;
-  const session = getSession(token);
+  const session = await getSession(token);
   if (!session) return null;
   return session.userId;
 }
@@ -35,57 +17,131 @@ function getUserFromCookie(cookieStore: Awaited<ReturnType<typeof cookies>>): st
 export async function GET() {
   try {
     const cookieStore = await cookies();
-    const userId = getUserFromCookie(cookieStore);
+    const userId = await getUserFromCookie(cookieStore);
 
     if (!userId) {
       return NextResponse.json({ conversations: [], settings: null });
     }
 
-    await ensureDir(DATA_DIR);
-    const filePath = path.join(DATA_DIR, `${userId}.json`);
+    // Get all conversations for this user
+    const conversations = await prisma.conversation.findMany({
+      where: { userId },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        messages: {
+          orderBy: { timestamp: "asc" },
+        },
+      },
+    });
 
-    try {
-      const data = await fs.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(data);
-      return NextResponse.json({
-        conversations: parsed.conversations || [],
-        settings: parsed.settings || null
-      });
-    } catch {
-      return NextResponse.json({ conversations: [], settings: null });
-    }
-  } catch {
+    // Get user settings
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { quotaLimit: true, quotaWindowHours: true },
+    });
+
+    const settings = user
+      ? {
+          provider: "opusmax",
+          apiKey: "",
+          baseUrl: "",
+          model: "claude-opus-4-6",
+          extendedThinking: false,
+          quotaLimit: user.quotaLimit ?? undefined,
+          quotaWindowHours: user.quotaWindowHours ?? undefined,
+        }
+      : null;
+
+    // Convert to frontend format
+    const conversationsData = conversations.map((conv) => ({
+      id: conv.id,
+      title: conv.title,
+      messages: conv.messages.map((msg) => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        contentBlocks: msg.contentBlocks,
+        thinking: msg.thinking,
+        attachedImages: msg.attachedImages,
+        timestamp: Number(msg.timestamp),
+      })),
+      artifacts: conv.artifacts || {},
+      toolCalls: {},
+      createdAt: conv.createdAt.getTime(),
+      updatedAt: conv.updatedAt.getTime(),
+    }));
+
+    return NextResponse.json({
+      conversations: conversationsData,
+      settings,
+    });
+  } catch (error) {
+    console.error("Failed to load chats:", error);
     return NextResponse.json({ conversations: [], settings: null });
   }
 }
 
-// POST /api/chats - save user's chats
+// POST /api/chats - save/update user's chats
 export async function POST(request: Request) {
   try {
     const cookieStore = await cookies();
-    const userId = getUserFromCookie(cookieStore);
+    const userId = await getUserFromCookie(cookieStore);
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Verify user still exists
-    const user = await getUserById(userId);
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 401 });
+    const body = await request.json();
+    const { conversations, settings } = body;
+
+    // Save conversations and messages
+    if (conversations && Array.isArray(conversations)) {
+      // Use a transaction to update all conversations
+      await prisma.$transaction(async (tx) => {
+        // Delete existing conversations (cascade deletes messages)
+        await tx.conversation.deleteMany({
+          where: { userId },
+        });
+
+        // Create new conversations with messages
+        for (const conv of conversations) {
+          await tx.conversation.create({
+            data: {
+              id: conv.id,
+              userId,
+              title: conv.title,
+              artifacts: conv.artifacts || {},
+              messages: {
+                create: conv.messages.map((msg: any) => ({
+                  id: msg.id,
+                  role: msg.role,
+                  content: msg.content,
+                  contentBlocks: msg.contentBlocks,
+                  thinking: msg.thinking,
+                  attachedImages: msg.attachedImages,
+                  timestamp: BigInt(msg.timestamp),
+                })),
+              },
+            },
+          });
+        }
+      });
     }
 
-    const { conversations, settings } = await request.json();
-
-    await ensureDir(DATA_DIR);
-    const filePath = path.join(DATA_DIR, `${userId}.json`);
-    const data = JSON.stringify({ conversations, settings }, null, 2);
-
-    await fs.writeFile(filePath, data, "utf-8");
+    // Save settings if provided
+    if (settings) {
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          quotaLimit: settings.quotaLimit,
+          quotaWindowHours: settings.quotaWindowHours,
+        },
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Failed to save chat:", error);
+    console.error("Failed to save chats:", error);
     return NextResponse.json({ error: "Failed to save" }, { status: 500 });
   }
 }
