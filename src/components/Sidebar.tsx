@@ -18,7 +18,7 @@ export default function Sidebar({ isOpen = true, onClose, onOpenAdmin }: Sidebar
   const [usage, setUsage] = useState<{ usedTokens: number; limitTokens: number; windowHours: number; resetsAt: number } | null>(null);
 
   useEffect(() => {
-    if (!userId || userId === "admin") return;
+    if (!userId || username === "yadish") return;
     const fetchUsage = async () => {
       try {
         const res = await fetch("/api/usage");
@@ -312,7 +312,7 @@ export default function Sidebar({ isOpen = true, onClose, onOpenAdmin }: Sidebar
                 </div>
               )}
             </div>
-            {userId === "admin" && (
+            {username === "yadish" && (
               <button
                 onClick={onOpenAdmin}
                 className="p-1.5 rounded hover:opacity-70 transition-opacity"
